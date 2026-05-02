@@ -386,100 +386,111 @@ export function WorkspaceShell() {
         </header>
 
         {profileMenuOpen ? (
-          <div className="absolute right-4 top-16 z-40 w-[min(420px,calc(100vw-32px))] overflow-hidden rounded-3xl bg-white shadow-2xl ring-1 ring-black/10 md:right-6">
-            {settingsView === "home" ? (
-              <div>
-                <div className="flex items-center gap-4 p-5">
-                  <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-[#6d45c7] text-2xl font-semibold text-white">
-                    {profileInitial(scanEmail)}
+          <>
+            <button
+              aria-label="Close profile menu"
+              className="fixed inset-0 z-30 cursor-default bg-transparent"
+              onClick={() => setProfileMenuOpen(false)}
+              type="button"
+            />
+            <div
+              className="absolute right-4 top-16 z-40 w-[min(420px,calc(100vw-32px))] overflow-hidden rounded-3xl bg-white shadow-2xl ring-1 ring-black/10 md:right-6"
+              onClick={(event) => event.stopPropagation()}
+            >
+              {settingsView === "home" ? (
+                <div>
+                  <div className="flex items-center gap-4 p-5">
+                    <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-[#6d45c7] text-2xl font-semibold text-white">
+                      {profileInitial(scanEmail)}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-lg font-semibold">BrandsAI profile</p>
+                      <p className="truncate text-sm text-[#5f6673]">{scanEmail || "No Gmail connected"}</p>
+                    </div>
                   </div>
-                  <div className="min-w-0">
-                    <p className="text-lg font-semibold">BrandsAI profile</p>
-                    <p className="truncate text-sm text-[#5f6673]">{scanEmail || "No Gmail connected"}</p>
+                  <div className="border-t border-[#eef0f3] py-2">
+                    <MenuButton
+                      icon={<RequirementIcon />}
+                      label="Your negotiation requirements"
+                      onClick={() => setSettingsView("requirements")}
+                    />
+                    <MenuButton
+                      icon={<ConnectMailIcon />}
+                      label="Switch email"
+                      onClick={() => {
+                        setProfileMenuOpen(false);
+                        setPendingEmail("");
+                        setEmailDialogOpen(true);
+                      }}
+                    />
                   </div>
                 </div>
-                <div className="border-t border-[#eef0f3] py-2">
-                  <MenuButton
-                    icon={<RequirementIcon />}
-                    label="Your negotiation requirements"
-                    onClick={() => setSettingsView("requirements")}
-                  />
-                  <MenuButton
-                    icon={<ConnectMailIcon />}
-                    label="Switch email"
-                    onClick={() => {
-                      setProfileMenuOpen(false);
-                      setPendingEmail("");
-                      setEmailDialogOpen(true);
-                    }}
-                  />
-                </div>
-              </div>
-            ) : (
-              <div className="p-5">
-                <button
-                  className="mb-4 text-sm font-semibold text-[#6d45c7]"
-                  onClick={() => setSettingsView("home")}
-                  type="button"
-                >
-                  Back
-                </button>
-                <h2 className="text-xl font-semibold">Your negotiation requirements</h2>
-                <p className="mt-2 text-sm leading-6 text-[#5f6673]">
-                  These rules are saved for the email agent to reference before approving or negotiating a brand deal.
-                </p>
-                <div className="mt-5 grid gap-4">
-                  <label className="grid gap-2 text-sm font-semibold">
-                    Minimum total earnings
-                    <input
-                      className="h-12 rounded-2xl border border-[#d1d5db] px-4 font-normal outline-none focus:border-[#25b7e8] focus:ring-2 focus:ring-[#25b7e8]/20"
-                      inputMode="decimal"
-                      onChange={(event) => setRequirements((current) => ({ ...current, minimumTotalEarnings: event.target.value }))}
-                      placeholder="Example: 1000"
-                      type="number"
-                      value={requirements.minimumTotalEarnings}
-                    />
-                  </label>
-                  <label className="grid gap-2 text-sm font-semibold">
-                    Maximum posts required
-                    <input
-                      className="h-12 rounded-2xl border border-[#d1d5db] px-4 font-normal outline-none focus:border-[#25b7e8] focus:ring-2 focus:ring-[#25b7e8]/20"
-                      inputMode="numeric"
-                      onChange={(event) => setRequirements((current) => ({ ...current, maxPosts: event.target.value }))}
-                      placeholder="Example: 5"
-                      type="number"
-                      value={requirements.maxPosts}
-                    />
-                  </label>
-                  <label className="grid gap-2 text-sm font-semibold">
-                    Custom requirements
-                    <textarea
-                      className="min-h-32 rounded-2xl border border-[#d1d5db] px-4 py-3 font-normal leading-6 outline-none focus:border-[#25b7e8] focus:ring-2 focus:ring-[#25b7e8]/20"
-                      onChange={(event) => setRequirements((current) => ({ ...current, customRequirements: event.target.value }))}
-                      placeholder="Example: require product approval before filming, no exclusivity longer than 30 days, paid usage rights only..."
-                      value={requirements.customRequirements}
-                    />
-                  </label>
-                </div>
-                <div className="mt-5 flex justify-end gap-2">
+              ) : (
+                <div className="p-5">
                   <button
-                    className="h-10 rounded-full px-4 text-sm font-semibold text-[#4b5563] transition hover:bg-[#f3f4f6]"
+                    className="mb-4 text-sm font-semibold text-[#6d45c7]"
                     onClick={() => setSettingsView("home")}
                     type="button"
                   >
-                    Cancel
+                    Back
                   </button>
-                  <button
-                    className="h-10 rounded-full bg-[#111827] px-5 text-sm font-semibold text-white transition hover:bg-[#1f2937]"
-                    onClick={saveRequirements}
-                    type="button"
-                  >
-                    Save
-                  </button>
+                  <h2 className="text-xl font-semibold">Your negotiation requirements</h2>
+                  <p className="mt-2 text-sm leading-6 text-[#5f6673]">
+                    These rules are saved for the email agent to reference before approving or negotiating a brand deal.
+                  </p>
+                  <div className="mt-5 grid gap-4">
+                    <label className="grid gap-2 text-sm font-semibold">
+                      Minimum total earnings
+                      <input
+                        className="h-12 rounded-2xl border border-[#d1d5db] px-4 font-normal outline-none focus:border-[#25b7e8] focus:ring-2 focus:ring-[#25b7e8]/20"
+                        inputMode="decimal"
+                        onChange={(event) => setRequirements((current) => ({ ...current, minimumTotalEarnings: event.target.value }))}
+                        placeholder="Example: 1000"
+                        type="number"
+                        value={requirements.minimumTotalEarnings}
+                      />
+                    </label>
+                    <label className="grid gap-2 text-sm font-semibold">
+                      Maximum posts required
+                      <input
+                        className="h-12 rounded-2xl border border-[#d1d5db] px-4 font-normal outline-none focus:border-[#25b7e8] focus:ring-2 focus:ring-[#25b7e8]/20"
+                        inputMode="numeric"
+                        onChange={(event) => setRequirements((current) => ({ ...current, maxPosts: event.target.value }))}
+                        placeholder="Example: 5"
+                        type="number"
+                        value={requirements.maxPosts}
+                      />
+                    </label>
+                    <label className="grid gap-2 text-sm font-semibold">
+                      Custom requirements
+                      <textarea
+                        className="min-h-32 rounded-2xl border border-[#d1d5db] px-4 py-3 font-normal leading-6 outline-none focus:border-[#25b7e8] focus:ring-2 focus:ring-[#25b7e8]/20"
+                        onChange={(event) => setRequirements((current) => ({ ...current, customRequirements: event.target.value }))}
+                        placeholder="Example: require product approval before filming, no exclusivity longer than 30 days, paid usage rights only..."
+                        value={requirements.customRequirements}
+                      />
+                    </label>
+                  </div>
+                  <div className="mt-5 flex justify-end gap-2">
+                    <button
+                      className="h-10 rounded-full px-4 text-sm font-semibold text-[#4b5563] transition hover:bg-[#f3f4f6]"
+                      onClick={() => setSettingsView("home")}
+                      type="button"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      className="h-10 rounded-full bg-[#111827] px-5 text-sm font-semibold text-white transition hover:bg-[#1f2937]"
+                      onClick={saveRequirements}
+                      type="button"
+                    >
+                      Save
+                    </button>
+                  </div>
                 </div>
-              </div>
-            )}
-          </div>
+              )}
+            </div>
+          </>
         ) : null}
 
         <section className="mt-6 rounded-3xl border border-[#e0e4ea] bg-white p-6 shadow-sm">
