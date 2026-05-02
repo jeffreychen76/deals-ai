@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 
 type IntakeDeal = {
@@ -35,7 +36,18 @@ type GmailErrorResponse = {
   oauthConfigured?: boolean;
 };
 
+type NegotiationRequirements = {
+  minimumTotalEarnings: string;
+  maxPosts: string;
+  customRequirements: string;
+};
+
 const defaultScanEmail = "";
+const defaultRequirements: NegotiationRequirements = {
+  minimumTotalEarnings: "",
+  maxPosts: "",
+  customRequirements: ""
+};
 type DealStage = "initial-review" | "negotiating" | "to-be-filmed" | "completed";
 const dealStages: Array<{ key: DealStage; label: string; countLabel: string }> = [
   { key: "initial-review", label: "Initial review", countLabel: "Initial review" },
@@ -56,6 +68,9 @@ export function WorkspaceShell() {
   const [scanState, setScanState] = useState("Connect Gmail to start scanning for brand deal opportunities.");
   const [searchQuery, setSearchQuery] = useState("");
   const [emailDialogOpen, setEmailDialogOpen] = useState(false);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [settingsView, setSettingsView] = useState<"home" | "requirements">("home");
+  const [requirements, setRequirements] = useState<NegotiationRequirements>(defaultRequirements);
   const [scanResults, setScanResults] = useState<IntakeDeal[]>([]);
   const [scanSource, setScanSource] = useState("Not connected");
   const [oauthConfigured, setOauthConfigured] = useState<boolean | null>(null);
@@ -120,6 +135,15 @@ export function WorkspaceShell() {
     if (savedEmail) {
       setScanEmail(savedEmail);
       setPendingEmail(savedEmail);
+    }
+
+    const savedRequirements = window.localStorage.getItem("brand-deal-negotiation-requirements");
+    if (savedRequirements) {
+      try {
+        setRequirements({ ...defaultRequirements, ...(JSON.parse(savedRequirements) as Partial<NegotiationRequirements>) });
+      } catch {
+        setRequirements(defaultRequirements);
+      }
     }
 
     const params = new URLSearchParams(window.location.search);
@@ -203,6 +227,12 @@ export function WorkspaceShell() {
     window.localStorage.setItem("brand-deal-intake-email", email);
     setEmailDialogOpen(false);
     void connectGmailForEmail(email);
+  };
+
+  const saveRequirements = () => {
+    window.localStorage.setItem("brand-deal-negotiation-requirements", JSON.stringify(requirements));
+    setSettingsView("home");
+    setProfileMenuOpen(true);
   };
 
   const connectGmailForEmail = async (email: string) => {
@@ -292,7 +322,16 @@ export function WorkspaceShell() {
     <main className="min-h-screen bg-[#fbfbfd] text-[#111827]">
       <section className="mx-auto min-h-screen max-w-7xl px-4 py-4 md:px-6">
         <header className="flex items-center gap-4">
-          <div className="flex min-w-0 items-center gap-3">
+          <button
+            className="flex min-w-0 items-center gap-3"
+            onClick={() => {
+              setActiveStage("initial-review");
+              setSearchQuery("");
+              setProfileMenuOpen(false);
+              window.history.pushState(null, "", "/");
+            }}
+            type="button"
+          >
             <Image
               alt="BrandsAI logo"
               className="h-10 w-10 object-cover"
@@ -303,7 +342,7 @@ export function WorkspaceShell() {
             <div>
               <p className="whitespace-nowrap text-xl font-semibold leading-none">BrandsAI</p>
             </div>
-          </div>
+          </button>
 
           <div className="mx-auto flex w-full max-w-2xl items-center rounded-full bg-[#f1f3f6] px-4 transition focus-within:bg-white focus-within:ring-2 focus-within:ring-[#25b7e8]/25">
             <SearchIcon />
@@ -334,6 +373,10 @@ export function WorkspaceShell() {
             <button
               aria-label="Profile"
               className="flex h-10 w-10 items-center justify-center rounded-full bg-[#6d45c7] text-sm font-semibold text-white"
+              onClick={() => {
+                setProfileMenuOpen((open) => !open);
+                setSettingsView("home");
+              }}
               title={scanEmail || "Profile"}
               type="button"
             >
@@ -341,6 +384,103 @@ export function WorkspaceShell() {
             </button>
           </div>
         </header>
+
+        {profileMenuOpen ? (
+          <div className="absolute right-4 top-16 z-40 w-[min(420px,calc(100vw-32px))] overflow-hidden rounded-3xl bg-white shadow-2xl ring-1 ring-black/10 md:right-6">
+            {settingsView === "home" ? (
+              <div>
+                <div className="flex items-center gap-4 p-5">
+                  <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-[#6d45c7] text-2xl font-semibold text-white">
+                    {profileInitial(scanEmail)}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-lg font-semibold">BrandsAI profile</p>
+                    <p className="truncate text-sm text-[#5f6673]">{scanEmail || "No Gmail connected"}</p>
+                  </div>
+                </div>
+                <div className="border-t border-[#eef0f3] py-2">
+                  <MenuButton
+                    icon={<RequirementIcon />}
+                    label="Your negotiation requirements"
+                    onClick={() => setSettingsView("requirements")}
+                  />
+                  <MenuButton
+                    icon={<ConnectMailIcon />}
+                    label="Switch email"
+                    onClick={() => {
+                      setProfileMenuOpen(false);
+                      setPendingEmail("");
+                      setEmailDialogOpen(true);
+                    }}
+                  />
+                </div>
+              </div>
+            ) : (
+              <div className="p-5">
+                <button
+                  className="mb-4 text-sm font-semibold text-[#6d45c7]"
+                  onClick={() => setSettingsView("home")}
+                  type="button"
+                >
+                  Back
+                </button>
+                <h2 className="text-xl font-semibold">Your negotiation requirements</h2>
+                <p className="mt-2 text-sm leading-6 text-[#5f6673]">
+                  These rules are saved for the email agent to reference before approving or negotiating a brand deal.
+                </p>
+                <div className="mt-5 grid gap-4">
+                  <label className="grid gap-2 text-sm font-semibold">
+                    Minimum total earnings
+                    <input
+                      className="h-12 rounded-2xl border border-[#d1d5db] px-4 font-normal outline-none focus:border-[#25b7e8] focus:ring-2 focus:ring-[#25b7e8]/20"
+                      inputMode="decimal"
+                      onChange={(event) => setRequirements((current) => ({ ...current, minimumTotalEarnings: event.target.value }))}
+                      placeholder="Example: 1000"
+                      type="number"
+                      value={requirements.minimumTotalEarnings}
+                    />
+                  </label>
+                  <label className="grid gap-2 text-sm font-semibold">
+                    Maximum posts required
+                    <input
+                      className="h-12 rounded-2xl border border-[#d1d5db] px-4 font-normal outline-none focus:border-[#25b7e8] focus:ring-2 focus:ring-[#25b7e8]/20"
+                      inputMode="numeric"
+                      onChange={(event) => setRequirements((current) => ({ ...current, maxPosts: event.target.value }))}
+                      placeholder="Example: 5"
+                      type="number"
+                      value={requirements.maxPosts}
+                    />
+                  </label>
+                  <label className="grid gap-2 text-sm font-semibold">
+                    Custom requirements
+                    <textarea
+                      className="min-h-32 rounded-2xl border border-[#d1d5db] px-4 py-3 font-normal leading-6 outline-none focus:border-[#25b7e8] focus:ring-2 focus:ring-[#25b7e8]/20"
+                      onChange={(event) => setRequirements((current) => ({ ...current, customRequirements: event.target.value }))}
+                      placeholder="Example: require product approval before filming, no exclusivity longer than 30 days, paid usage rights only..."
+                      value={requirements.customRequirements}
+                    />
+                  </label>
+                </div>
+                <div className="mt-5 flex justify-end gap-2">
+                  <button
+                    className="h-10 rounded-full px-4 text-sm font-semibold text-[#4b5563] transition hover:bg-[#f3f4f6]"
+                    onClick={() => setSettingsView("home")}
+                    type="button"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    className="h-10 rounded-full bg-[#111827] px-5 text-sm font-semibold text-white transition hover:bg-[#1f2937]"
+                    onClick={saveRequirements}
+                    type="button"
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : null}
 
         <section className="mt-6 rounded-3xl border border-[#e0e4ea] bg-white p-6 shadow-sm">
           <div className="mb-3 flex items-center justify-between gap-3">
@@ -493,6 +633,29 @@ function ConnectMailIcon() {
       <path d="m5.25 7.25 6.75 5 6.75-5" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
       <path d="M19 4v5m-2.5-2.5h5" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
     </svg>
+  );
+}
+
+function RequirementIcon() {
+  return (
+    <svg aria-hidden="true" className="h-5 w-5" fill="none" viewBox="0 0 24 24">
+      <path d="M7 6h10M7 12h10M7 18h6" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
+      <path d="M4.5 6h.01M4.5 12h.01M4.5 18h.01" stroke="currentColor" strokeLinecap="round" strokeWidth="3" />
+    </svg>
+  );
+}
+
+function MenuButton({ icon, label, onClick }: { icon: ReactNode; label: string; onClick: () => void }) {
+  return (
+    <button
+      className="flex h-14 w-full items-center gap-4 px-5 text-left text-base transition hover:bg-[#f7f8fb]"
+      onClick={onClick}
+      type="button"
+    >
+      <span className="flex h-9 w-9 items-center justify-center text-[#111827]">{icon}</span>
+      <span className="flex-1">{label}</span>
+      <span className="text-xl text-[#6b7280]">›</span>
+    </button>
   );
 }
 
