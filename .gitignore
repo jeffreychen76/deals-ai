@@ -1,0 +1,10 @@
+.next
+node_modules
+dist
+.DS_Store
+__pycache__/
+.env.local
+data/pm-agent-state.json
+data/gmail-oauth-tokens.json
+data/uploads/*
+!data/uploads/.gitkeep
