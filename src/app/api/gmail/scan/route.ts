@@ -34,10 +34,12 @@ function firstName(from: string) {
 
 function inferCompany(from: string, subject: string) {
   const domain = from.match(/@([^>\s]+)/)?.[1]?.split(".")[0];
-  const subjectCompany = subject.match(/(?:with|for|from)\s+([A-Z][A-Za-z0-9]+)/)?.[1];
+  const subjectCompany = subject.match(/(?:with|for|from)\s+(.+?)(?:\s+(?:on|via|about|campaign|deal|collab|collaboration)\b|$)/i)?.[1];
   const candidate = subjectCompany ?? domain ?? "Unknown brand";
   return candidate
-    .split(/[-_.]/)
+    .replace(/^(?:brand\s+deal|sponsorship|collaboration)\s+/i, "")
+    .replace(/[!?.]+$/g, "")
+    .split(/[-_.\s]+/)
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");

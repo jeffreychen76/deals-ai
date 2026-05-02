@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 type IntakeDeal = {
   id: string;
@@ -34,18 +34,54 @@ type GmailErrorResponse = {
   oauthConfigured?: boolean;
 };
 
+const defaultScanEmail = "jjc.777222@gmail.com";
+type DealStage = "initial-review" | "negotiating" | "to-be-filmed" | "completed";
+const dealStages: Array<{ key: DealStage; label: string; countLabel: string }> = [
+  { key: "initial-review", label: "Initial review", countLabel: "Initial review" },
+  { key: "negotiating", label: "Negotiating", countLabel: "Negotiating" },
+  { key: "to-be-filmed", label: "To be filmed", countLabel: "To be filmed" },
+  { key: "completed", label: "Completed", countLabel: "Completed" }
+];
+const stageStyles: Record<DealStage, string> = {
+  "initial-review": "border-[#7dd3fc]/55 bg-[#0a2230] text-[#9be8ff]",
+  negotiating: "border-[#fbbf24]/55 bg-[#2f2208] text-[#fde68a]",
+  "to-be-filmed": "border-[#c084fc]/55 bg-[#241334] text-[#e9d5ff]",
+  completed: "border-[#34d399]/55 bg-[#0c2a21] text-[#a7f3d0]"
+};
+
 export function WorkspaceShell() {
-  const [scanEmail, setScanEmail] = useState("jjc.777222@gmail.com");
-  const [scanState, setScanState] = useState("Connect Gmail, then click Scan Gmail to run a live Intake Agent scan.");
+  const [scanEmail, setScanEmail] = useState(defaultScanEmail);
+  const [scanState, setScanState] = useState("Connect Gmail to start scanning for brand deal opportunities.");
   const [scanResults, setScanResults] = useState<IntakeDeal[]>([]);
   const [scanSource, setScanSource] = useState("Not connected");
   const [oauthConfigured, setOauthConfigured] = useState<boolean | null>(null);
   const [redirectUri, setRedirectUri] = useState("http://localhost:3000/api/gmail/auth/callback");
   const [connected, setConnected] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
+  const [activeStage, setActiveStage] = useState<DealStage>("initial-review");
+
+  const completedDeals: IntakeDeal[] = [];
+  const stageCounts: Record<DealStage, number> = {
+    "initial-review": scanResults.length,
+    negotiating: 0,
+    "to-be-filmed": 0,
+    completed: completedDeals.length
+  };
+  const visibleDeals = activeStage === "initial-review" ? scanResults : activeStage === "completed" ? completedDeals : [];
+  const potentialEarnings = useMemo(
+    () => scanResults.reduce((total, deal) => total + calculateDealValue(deal).total, 0),
+    [scanResults]
+  );
+  const analytics = [
+    { label: "Earnings", value: "$0" },
+    { label: "Potential earnings", value: formatMoney(potentialEarnings) },
+    { label: "Completed deals", value: String(completedDeals.length) },
+    { label: "Ongoing deals", value: String(scanResults.length) }
+  ];
 
   useEffect(() => {
     const savedEmail = window.localStorage.getItem("brand-deal-intake-email");
+    const initialEmail = savedEmail ?? defaultScanEmail;
     if (savedEmail) {
       setScanEmail(savedEmail);
     }
@@ -58,6 +94,7 @@ export function WorkspaceShell() {
       setScanSource("Gmail connected");
       setScanState(email ? `Gmail connected for ${email}. Click Scan Gmail to run a live scan.` : "Gmail connected. Click Scan Gmail to run a live scan.");
       window.history.replaceState(null, "", "/");
+      return;
     }
 
     if (params.get("gmail") === "oauth-error") {
@@ -66,7 +103,10 @@ export function WorkspaceShell() {
       setScanSource("Gmail OAuth error");
       setScanState(detail ? `Gmail OAuth failed: ${detail}` : "Gmail OAuth failed. Check the OAuth setup and try connecting again.");
       window.history.replaceState(null, "", "/");
+      return;
     }
+
+    void refreshGmailStatus(initialEmail);
   }, []);
 
   useEffect(() => {
@@ -96,6 +136,24 @@ export function WorkspaceShell() {
     }
 
     window.location.href = `/api/gmail/auth/start?email=${encodeURIComponent(email)}`;
+  };
+
+  const refreshGmailStatus = async (email: string) => {
+    try {
+      const response = await fetch(`/api/gmail/auth/status?email=${encodeURIComponent(email)}`);
+      const status = (await response.json()) as { configured: boolean; connected: boolean; redirectUri?: string; email?: string };
+      setOauthConfigured(status.configured);
+      setConnected(status.connected);
+      setScanSource(status.connected ? "Gmail connected" : "Not connected");
+      if (status.redirectUri) {
+        setRedirectUri(status.redirectUri);
+      }
+      if (status.connected) {
+        setScanState(`Gmail connected for ${status.email ?? email}. Ready to scan.`);
+      }
+    } catch {
+      setScanSource("Not connected");
+    }
   };
 
   const scanGmail = async () => {
@@ -145,106 +203,116 @@ export function WorkspaceShell() {
   };
 
   return (
-    <main className="min-h-screen bg-[#f7f3ea] px-4 py-6 text-[#16221f] md:px-6">
-      <section className="mx-auto max-w-3xl border border-[#d8d2c3] bg-[#fffdf8] p-5 shadow-sm md:p-7">
-        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#7f3d2a]">Task 1</p>
-        <h1 className="mt-2 text-3xl font-semibold leading-tight">Intake Agent</h1>
-        <p className="mt-3 text-sm leading-6 text-[#66706b]">
-          Connect Gmail with read-only OAuth, then scan all mail for likely brand deal emails, including Spam.
-        </p>
-
-        <div className="mt-6 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
-          <label className="grid gap-2 text-sm font-semibold">
-            Gmail to scan
-            <input
-              className="h-11 border border-[#ded7c9] bg-white px-3 font-normal outline-none focus:border-[#7f3d2a]"
-              inputMode="email"
-              onChange={(event) => setScanEmail(event.target.value)}
-              placeholder="name@gmail.com"
-              type="email"
-              value={scanEmail}
-            />
-          </label>
-          <button
-            className="h-11 self-end border border-[#8c4a32] bg-white px-5 text-sm font-semibold text-[#8c4a32] transition hover:bg-[#f8f4ec]"
-            onClick={connectGmail}
-            type="button"
-          >
-            Connect Gmail
-          </button>
-          <button
-            className="h-11 self-end border border-[#16221f] bg-[#16221f] px-5 text-sm font-semibold text-white transition hover:bg-[#294039] disabled:opacity-60"
-            disabled={isScanning}
-            onClick={scanGmail}
-            type="button"
-          >
-            {isScanning ? "Scanning..." : "Scan Gmail"}
-          </button>
-        </div>
-
-        <div className="mt-5 border border-[#ded7c9] bg-[#f8f4ec] p-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[#66706b]">Status</p>
-          <p className="mt-2 text-sm leading-6">{scanState}</p>
-          <p className="mt-2 text-xs leading-5 text-[#66706b]">
-            Source: {scanSource}
-            {oauthConfigured === false ? " · OAuth credentials missing" : ""}
-          </p>
-          <p className="mt-2 break-all text-xs leading-5 text-[#66706b]">
-            Google redirect URI: {redirectUri}
-          </p>
-        </div>
-
-        {oauthConfigured === false ? (
-          <div className="mt-5 border border-[#b98670] bg-white p-4">
-            <p className="text-sm font-semibold text-[#8c4a32]">OAuth setup needed</p>
-            <p className="mt-2 text-sm leading-6 text-[#66706b]">
-              Add these values to <code>.env.local</code>, restart the dev server, then click Connect Gmail again.
-            </p>
-            <div className="mt-3 grid gap-2 text-sm">
-              <InfoLine label="Required" value="GOOGLE_CLIENT_ID" />
-              <InfoLine label="Required" value="GOOGLE_CLIENT_SECRET" />
-              <InfoLine label="Redirect URI" value={redirectUri} />
-              <InfoLine label="Scope" value="https://www.googleapis.com/auth/gmail.readonly" />
+    <main className="min-h-screen bg-[#080b10] px-4 py-5 text-[#f4f7fb] md:px-7 md:py-8">
+      <section className="mx-auto min-h-[calc(100vh-40px)] max-w-7xl border border-[#273241] bg-[#0c1118] p-4 shadow-[0_24px_80px_rgba(0,0,0,0.38)] md:min-h-[calc(100vh-64px)] md:p-6">
+        <header className="grid gap-4 lg:grid-cols-[190px_minmax(0,1fr)_260px] lg:items-stretch">
+          <div className="flex items-center gap-3 border border-[#2b3545] bg-[#111821] px-4 py-4">
+            <div className="flex h-10 w-10 items-center justify-center border border-[#3b485b] bg-[#151f2b] text-sm font-black text-[#8ee4ff]">
+              D
+            </div>
+            <div>
+              <p className="text-lg font-semibold leading-none">DealsAI</p>
+              <p className="mt-1 text-xs text-[#8c98a8]">Creator deals</p>
             </div>
           </div>
-        ) : null}
 
-        {connected ? (
-          <div className="mt-5 border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-800">
-            Gmail is connected. Scan Gmail will now use the live Gmail API.
+          <div className="border border-[#2b3545] bg-[#111821] p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#7f8b9e]">Analytics dashboard</p>
+                <p className="mt-1 text-sm text-[#b7c2d0]">This month</p>
+              </div>
+              <span className="border border-[#2f3b4c] bg-[#0c1118] px-3 py-1 text-xs text-[#9aa7b8]">{scanSource}</span>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              {analytics.map((item) => (
+                <div className="border border-[#253141] bg-[#0c1118] p-3" key={item.label}>
+                  <p className="text-xs text-[#8c98a8]">{item.label}</p>
+                  <p className="mt-2 text-2xl font-semibold leading-none">{item.value}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="border border-[#2b3545] bg-[#111821] p-4">
+            {connected ? (
+              <div className="flex h-full flex-col justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#7f8b9e]">Gmail connected</p>
+                  <p className="mt-2 break-all text-sm text-[#c9d3df]">{scanEmail}</p>
+                  <p className="mt-3 text-xs leading-5 text-[#8c98a8]">{scanState}</p>
+                </div>
+                <button
+                  className="h-12 border border-[#7dd3fc] bg-[#0ea5e9] px-5 text-sm font-semibold text-[#041016] transition hover:bg-[#38bdf8] disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={isScanning}
+                  onClick={scanGmail}
+                  type="button"
+                >
+                  {isScanning ? "Scanning..." : "Scan Gmail"}
+                </button>
+              </div>
+            ) : (
+              <div className="grid gap-3">
+                <label className="grid gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-[#7f8b9e]">
+                  Connect Gmail
+                  <input
+                    className="h-11 border border-[#2f3b4c] bg-[#0c1118] px-3 text-sm font-normal normal-case tracking-normal text-[#f4f7fb] outline-none transition placeholder:text-[#647084] focus:border-[#7dd3fc]"
+                    inputMode="email"
+                    onChange={(event) => setScanEmail(event.target.value)}
+                    placeholder="name@gmail.com"
+                    type="email"
+                    value={scanEmail}
+                  />
+                </label>
+                <button
+                  className="h-11 border border-[#3b485b] bg-[#f4f7fb] px-5 text-sm font-semibold text-[#0c1118] transition hover:bg-[#dce6f2]"
+                  onClick={connectGmail}
+                  type="button"
+                >
+                  Connect Gmail
+                </button>
+                <p className="text-xs leading-5 text-[#8c98a8]">{scanState}</p>
+              </div>
+            )}
+          </div>
+        </header>
+
+        {oauthConfigured === false ? (
+          <div className="mt-5 border border-[#7a3f2f] bg-[#180e0b] p-4">
+            <p className="text-xs leading-5 text-[#f7b7a3]">
+              OAuth setup needed: add Google client credentials to <code>.env.local</code>. Redirect URI: {redirectUri}
+            </p>
           </div>
         ) : null}
 
-        {scanResults.length ? (
-          <div className="mt-5 grid gap-3">
-            {scanResults.map((deal) => (
-              <article className="border border-[#ded7c9] bg-white p-4" key={deal.id}>
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <h2 className="text-lg font-semibold">{deal.company}</h2>
-                    <p className="mt-1 text-sm text-[#66706b]">{deal.contact}</p>
-                  </div>
-                  <span className="border border-sky-200 bg-sky-50 px-2.5 py-1 text-xs font-semibold text-sky-800">
-                    Candidate
-                  </span>
-                </div>
-                <div className="mt-4 grid gap-2 text-sm text-[#3d4843]">
-                  <InfoLine label="Offer" value={deal.offer} />
-                  <InfoLine label="Deliverables" value={deal.deliverables} />
-                  <InfoLine label="Timeline" value={deal.timeline} />
-                  <InfoLine label="Next" value={deal.nextAction} />
-                </div>
-                {deal.emails[0] ? (
-                  <div className="mt-4 border border-[#eee7d8] bg-[#fbfaf6] p-3">
-                    <p className="text-sm font-semibold">{deal.emails[0].subject}</p>
-                    <p className="mt-1 text-xs text-[#66706b]">
-                      {deal.emails[0].from} · {deal.emails[0].timestamp}
-                    </p>
-                    <p className="mt-2 text-sm leading-6 text-[#66706b]">{deal.emails[0].excerpt}</p>
-                  </div>
-                ) : null}
-              </article>
-            ))}
+        <div className="mt-5 flex flex-wrap justify-center gap-3">
+          {dealStages.map((stage) => (
+            <TabButton
+              active={activeStage === stage.key}
+              label={`${stage.label} (${stageCounts[stage.key]})`}
+              onClick={() => setActiveStage(stage.key)}
+              stage={stage.key}
+              key={stage.key}
+            />
+          ))}
+        </div>
+
+        <section className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {visibleDeals.map((deal) => (
+            <DealCard deal={deal} stage={activeStage} key={deal.id} />
+          ))}
+        </section>
+
+        {!visibleDeals.length ? (
+          <div className="mt-6 flex min-h-56 items-center justify-center border border-dashed border-[#2f3b4c] bg-[#0a0f15] p-6 text-center">
+            <div>
+              <p className="text-lg font-semibold">No {dealStages.find((stage) => stage.key === activeStage)?.label.toLowerCase()} deals yet</p>
+              <p className="mt-2 max-w-md text-sm leading-6 text-[#8c98a8]">
+                {connected
+                  ? "Scan Gmail to pull in brand deal candidates for the Intake Agent."
+                  : "Connect Gmail to unlock live scanning and populate your deal tracker."}
+              </p>
+            </div>
           </div>
         ) : null}
       </section>
@@ -252,11 +320,162 @@ export function WorkspaceShell() {
   );
 }
 
-function InfoLine({ label, value }: { label: string; value: string }) {
+function TabButton({ active, label, onClick, stage }: { active: boolean; label: string; onClick: () => void; stage: DealStage }) {
   return (
-    <div className="grid gap-1 sm:grid-cols-[110px_minmax(0,1fr)]">
-      <span className="text-xs font-semibold uppercase tracking-[0.12em] text-[#66706b]">{label}</span>
-      <span>{value}</span>
+    <button
+      className={`h-11 min-w-44 border px-5 text-sm font-semibold transition ${
+        active
+          ? stageStyles[stage]
+          : "border-[#2b3545] bg-[#101720] text-[#9aa7b8] hover:border-[#4a5a70] hover:text-[#f4f7fb]"
+      }`}
+      onClick={onClick}
+      type="button"
+    >
+      {label}
+    </button>
+  );
+}
+
+function DealCard({ deal, stage }: { deal: IntakeDeal; stage: DealStage }) {
+  const latestEmail = deal.emails[0];
+  const emailText = `${latestEmail?.subject ?? ""} ${latestEmail?.excerpt ?? ""}`;
+  const payment = calculateDealValue(deal);
+
+  return (
+    <article className="min-h-64 border border-[#2b3545] bg-[#111821] p-4 transition hover:border-[#53647b]">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-xl font-semibold text-[#f4f7fb]">{deal.company}</h2>
+          <p className="mt-1 break-all text-sm text-[#8c98a8]">POC: {extractSenderEmail(latestEmail?.from ?? deal.contact)}</p>
+        </div>
+        <StatusTag stage={stage} />
+      </div>
+
+      <div className="mt-5 grid gap-4 text-sm">
+        <InfoLine label="Potential earnings" value={formatMoney(payment.total)} strong />
+        <InfoLine label="Deliverables" value={describeDeliverables(deal, payment)} />
+        <InfoLine label="Timeline" value={describeTimeline(deal.timeline, emailText)} />
+      </div>
+
+      <div className="mt-5 grid grid-cols-2 gap-2">
+        <ActionButton label="Negotiate" tone="warning" />
+        <ActionButton label="Decline" tone="neutral" />
+      </div>
+
+      {latestEmail ? (
+        <div className="mt-5 border border-[#253141] bg-[#0c1118] p-3">
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[#7f8b9e]">Latest email</p>
+          <p className="mt-2 line-clamp-1 text-sm font-semibold text-[#d7dee8]">{latestEmail.subject}</p>
+          <p className="mt-1 line-clamp-1 text-xs text-[#7f8b9e]">{latestEmail.from}</p>
+          <p className="mt-2 line-clamp-3 text-sm leading-6 text-[#9aa7b8]">{decodeHtmlEntities(latestEmail.excerpt)}</p>
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+function StatusTag({ stage }: { stage: DealStage }) {
+  const label = dealStages.find((item) => item.key === stage)?.label ?? "Initial review";
+
+  return (
+    <span className={`shrink-0 border px-3 py-2 text-xs font-semibold ${stageStyles[stage]}`}>
+      {label}
+    </span>
+  );
+}
+
+function ActionButton({ label, tone }: { label: string; tone: "neutral" | "warning" }) {
+  const className =
+    tone === "neutral"
+      ? "border-[#4b5563] bg-[#151b24] text-[#cbd5e1] hover:bg-[#1f2937] hover:text-white"
+      : "border-[#fbbf24]/60 bg-[#302409] text-[#fde68a] hover:bg-[#4a350b] hover:text-white";
+
+  return (
+    <button
+      className={`h-10 border px-3 text-xs font-semibold transition ${className}`}
+      type="button"
+    >
+      {label}
+    </button>
+  );
+}
+
+function InfoLine({ label, value, strong = false }: { label: string; value: string; strong?: boolean }) {
+  return (
+    <div className="grid gap-1 sm:grid-cols-[150px_minmax(0,1fr)]">
+      <span className="text-xs font-semibold uppercase tracking-[0.12em] text-[#7f8b9e]">{label}</span>
+      <span className={strong ? "text-lg font-semibold text-[#f4f7fb]" : "text-[#d7dee8]"}>{value}</span>
     </div>
   );
+}
+
+function formatMoney(value: number) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0
+  }).format(value);
+}
+
+function calculateDealValue(deal: IntakeDeal) {
+  const text = `${deal.offer} ${deal.deliverables} ${deal.emails[0]?.subject ?? ""} ${deal.emails[0]?.excerpt ?? ""}`;
+  const unitMatch = text.match(/\$([\d,]+(?:\.\d+)?)\s*(?:per|\/)\s*(post|video|short|reel|tiktok)/i);
+  const countMatch = text.match(/(?:up to\s+)?(\d+)\s+(posts?|videos?|shorts?|reels?|tiktoks?)/i);
+  const allAmounts = [...text.matchAll(/\$([\d,]+(?:\.\d+)?)/g)].map((match) => Number(match[1].replace(/,/g, "")));
+  const bonusAmounts = [...text.matchAll(/(?:bonus|bonuses)[^\$]{0,40}\$([\d,]+(?:\.\d+)?)/gi)].map((match) =>
+    Number(match[1].replace(/,/g, ""))
+  );
+  const paymentPerTask = unitMatch ? Number(unitMatch[1].replace(/,/g, "")) : 0;
+  const taskCount = countMatch ? Number(countMatch[1]) : 0;
+  const unitTotal = paymentPerTask && taskCount ? paymentPerTask * taskCount : 0;
+  const unitAmount = paymentPerTask || null;
+  const cashPayments = allAmounts.filter((amount) => amount !== unitAmount && !bonusAmounts.includes(amount));
+  const cashTotal = unitTotal ? cashPayments.reduce((total, amount) => total + amount, 0) : allAmounts[0] ?? 0;
+  const bonusTotal = bonusAmounts.reduce((total, amount) => total + amount, 0);
+  const total = unitTotal + cashTotal + bonusTotal;
+
+  return {
+    total,
+    paymentPerTask,
+    taskCount,
+    taskType: countMatch?.[2] ?? unitMatch?.[2] ?? "deliverable",
+    bonusTotal,
+    cashTotal
+  };
+}
+
+function describeDeliverables(deal: IntakeDeal, payment: ReturnType<typeof calculateDealValue>) {
+  const parts = [];
+  if (payment.paymentPerTask && payment.taskCount) {
+    parts.push(`${payment.taskCount} ${payment.taskType} at ${formatMoney(payment.paymentPerTask)} each`);
+  } else if (deal.deliverables !== "Unknown") {
+    parts.push(deal.deliverables);
+  }
+
+  if (payment.cashTotal) {
+    parts.push(`${formatMoney(payment.cashTotal)} cash payment`);
+  }
+
+  if (payment.bonusTotal) {
+    parts.push(`${formatMoney(payment.bonusTotal)} bonus potential`);
+  }
+
+  return parts.length ? parts.join(" + ") : "Needs deliverables confirmed";
+}
+
+function describeTimeline(timeline: string, text: string) {
+  const dayMatch = text.match(/(?:within|in)\s+(\d+)\s+days?/i);
+  if (dayMatch) {
+    return `${dayMatch[1]} days`;
+  }
+
+  return timeline === "Unknown" ? "Needs timeline confirmed" : timeline;
+}
+
+function extractSenderEmail(value: string) {
+  return value.match(/<([^>]+)>/)?.[1] ?? value.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] ?? value;
+}
+
+function decodeHtmlEntities(value: string) {
+  return value.replace(/&#39;/g, "'").replace(/&quot;/g, "\"").replace(/&amp;/g, "&");
 }
