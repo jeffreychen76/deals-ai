@@ -1,6 +1,6 @@
-# AI Product Strategist MVP
+# Deals AI
 
-Chat-first web MVP for product leads to recommend what to build, draft PM artifacts, and debug metric changes.
+Local web dashboard for scanning Gmail for likely creator brand deal emails.
 
 ## Run
 
@@ -17,16 +17,24 @@ npm install
 cp .env.example .env.local
 ```
 
-4. Start the app:
+4. Add your Google OAuth client credentials to `.env.local`.
+
+Required redirect URI in Google Cloud:
+
+```text
+http://localhost:3000/api/gmail/auth/callback
+```
+
+5. Start the app:
 
 ```bash
 npm run dev
 ```
 
-5. Open `http://localhost:3000`.
+6. Open `http://localhost:3000`.
 
 ## Notes
 
-- The app works in mock mode without `OPENAI_API_KEY`.
-- Uploaded files are stored under `data/uploads/`.
-- Workspace state is stored in `data/pm-agent-state.json`.
+- The current MVP focuses on the Intake Agent and manual Gmail scans.
+- OAuth tokens are stored locally in `data/gmail-oauth-tokens.json` and are ignored by Git.
+- `.env.local` is ignored by Git and should contain real OAuth secrets only on your machine.
