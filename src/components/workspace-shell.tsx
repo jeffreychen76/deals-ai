@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
 
 type IntakeDeal = {
@@ -34,7 +35,7 @@ type GmailErrorResponse = {
   oauthConfigured?: boolean;
 };
 
-const defaultScanEmail = "jjc.777222@gmail.com";
+const defaultScanEmail = "";
 type DealStage = "initial-review" | "negotiating" | "to-be-filmed" | "completed";
 const dealStages: Array<{ key: DealStage; label: string; countLabel: string }> = [
   { key: "initial-review", label: "Initial review", countLabel: "Initial review" },
@@ -43,15 +44,18 @@ const dealStages: Array<{ key: DealStage; label: string; countLabel: string }> =
   { key: "completed", label: "Completed", countLabel: "Completed" }
 ];
 const stageStyles: Record<DealStage, string> = {
-  "initial-review": "border-[#7dd3fc]/55 bg-[#0a2230] text-[#9be8ff]",
-  negotiating: "border-[#fbbf24]/55 bg-[#2f2208] text-[#fde68a]",
-  "to-be-filmed": "border-[#c084fc]/55 bg-[#241334] text-[#e9d5ff]",
-  completed: "border-[#34d399]/55 bg-[#0c2a21] text-[#a7f3d0]"
+  "initial-review": "bg-[#e8f7ff] text-[#126c9c]",
+  negotiating: "bg-[#fff4cc] text-[#946200]",
+  "to-be-filmed": "bg-[#f1e8ff] text-[#6d35c2]",
+  completed: "bg-[#dcfce7] text-[#15803d]"
 };
 
 export function WorkspaceShell() {
   const [scanEmail, setScanEmail] = useState(defaultScanEmail);
+  const [pendingEmail, setPendingEmail] = useState(defaultScanEmail);
   const [scanState, setScanState] = useState("Connect Gmail to start scanning for brand deal opportunities.");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [emailDialogOpen, setEmailDialogOpen] = useState(false);
   const [scanResults, setScanResults] = useState<IntakeDeal[]>([]);
   const [scanSource, setScanSource] = useState("Not connected");
   const [oauthConfigured, setOauthConfigured] = useState<boolean | null>(null);
@@ -60,14 +64,45 @@ export function WorkspaceShell() {
   const [isScanning, setIsScanning] = useState(false);
   const [activeStage, setActiveStage] = useState<DealStage>("initial-review");
 
-  const completedDeals: IntakeDeal[] = [];
+  const completedDeals = useMemo<IntakeDeal[]>(() => [], []);
   const stageCounts: Record<DealStage, number> = {
     "initial-review": scanResults.length,
     negotiating: 0,
     "to-be-filmed": 0,
     completed: completedDeals.length
   };
-  const visibleDeals = activeStage === "initial-review" ? scanResults : activeStage === "completed" ? completedDeals : [];
+  const stageDeals = useMemo(
+    () => (activeStage === "initial-review" ? scanResults : activeStage === "completed" ? completedDeals : []),
+    [activeStage, completedDeals, scanResults]
+  );
+  const visibleDeals = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+
+    if (!query) {
+      return stageDeals;
+    }
+
+    const allDeals = [...scanResults, ...completedDeals];
+    return allDeals.filter((deal) => {
+      const latestEmail = deal.emails[0];
+      const searchable = [
+        deal.company,
+        deal.contact,
+        deal.offer,
+        deal.deliverables,
+        deal.timeline,
+        deal.nextAction,
+        latestEmail?.from,
+        latestEmail?.subject,
+        latestEmail?.excerpt
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      return searchable.includes(query);
+    });
+  }, [completedDeals, scanResults, searchQuery, stageDeals]);
   const potentialEarnings = useMemo(
     () => scanResults.reduce((total, deal) => total + calculateDealValue(deal).total, 0),
     [scanResults]
@@ -84,6 +119,7 @@ export function WorkspaceShell() {
     const initialEmail = savedEmail ?? defaultScanEmail;
     if (savedEmail) {
       setScanEmail(savedEmail);
+      setPendingEmail(savedEmail);
     }
 
     const params = new URLSearchParams(window.location.search);
@@ -106,7 +142,9 @@ export function WorkspaceShell() {
       return;
     }
 
-    void refreshGmailStatus(initialEmail);
+    if (initialEmail) {
+      void refreshGmailStatus(initialEmail);
+    }
   }, []);
 
   useEffect(() => {
@@ -116,10 +154,58 @@ export function WorkspaceShell() {
   const connectGmail = async () => {
     const email = scanEmail.trim();
     if (!email) {
+      setPendingEmail("");
+      setEmailDialogOpen(true);
+      return;
+    }
+
+    const response = await fetch(`/api/gmail/auth/status?email=${encodeURIComponent(email)}`);
+    const status = (await response.json()) as { configured: boolean; connected: boolean; redirectUri?: string };
+    setOauthConfigured(status.configured);
+    setConnected(status.connected);
+    if (status.redirectUri) {
+      setRedirectUri(status.redirectUri);
+    }
+
+    if (!status.configured) {
+      setScanState(
+        "Google OAuth is not configured yet. Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to .env.local, then restart the server."
+      );
+      return;
+    }
+
+    window.location.href = `/api/gmail/auth/start?email=${encodeURIComponent(email)}`;
+  };
+
+  const openGmailAction = () => {
+    if (connected) {
+      void scanGmail();
+      return;
+    }
+
+    if (!scanEmail.trim()) {
+      setPendingEmail("");
+      setEmailDialogOpen(true);
+      return;
+    }
+
+    void connectGmail();
+  };
+
+  const submitEmailDialog = () => {
+    const email = pendingEmail.trim();
+    if (!email) {
       setScanState("Enter the Gmail address to connect.");
       return;
     }
 
+    setScanEmail(email);
+    window.localStorage.setItem("brand-deal-intake-email", email);
+    setEmailDialogOpen(false);
+    void connectGmailForEmail(email);
+  };
+
+  const connectGmailForEmail = async (email: string) => {
     const response = await fetch(`/api/gmail/auth/status?email=${encodeURIComponent(email)}`);
     const status = (await response.json()) as { configured: boolean; connected: boolean; redirectUri?: string };
     setOauthConfigured(status.configured);
@@ -203,89 +289,86 @@ export function WorkspaceShell() {
   };
 
   return (
-    <main className="min-h-screen bg-[#080b10] px-4 py-5 text-[#f4f7fb] md:px-7 md:py-8">
-      <section className="mx-auto min-h-[calc(100vh-40px)] max-w-7xl border border-[#273241] bg-[#0c1118] p-4 shadow-[0_24px_80px_rgba(0,0,0,0.38)] md:min-h-[calc(100vh-64px)] md:p-6">
-        <header className="grid gap-4 lg:grid-cols-[190px_minmax(0,1fr)_260px] lg:items-stretch">
-          <div className="flex items-center gap-3 border border-[#2b3545] bg-[#111821] px-4 py-4">
-            <div className="flex h-10 w-10 items-center justify-center border border-[#3b485b] bg-[#151f2b] text-sm font-black text-[#8ee4ff]">
-              D
-            </div>
+    <main className="min-h-screen bg-[#fbfbfd] text-[#111827]">
+      <section className="mx-auto min-h-screen max-w-7xl px-4 py-4 md:px-6">
+        <header className="flex items-center gap-4">
+          <div className="flex min-w-0 items-center gap-3">
+            <Image
+              alt="BrandsAI logo"
+              className="h-10 w-10 object-cover"
+              height={40}
+              src="/brandsai-logo.jpg"
+              width={40}
+            />
             <div>
-              <p className="text-lg font-semibold leading-none">DealsAI</p>
-              <p className="mt-1 text-xs text-[#8c98a8]">Creator deals</p>
+              <p className="whitespace-nowrap text-xl font-semibold leading-none">BrandsAI</p>
             </div>
           </div>
 
-          <div className="border border-[#2b3545] bg-[#111821] p-4">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#7f8b9e]">Analytics dashboard</p>
-                <p className="mt-1 text-sm text-[#b7c2d0]">This month</p>
-              </div>
-              <span className="border border-[#2f3b4c] bg-[#0c1118] px-3 py-1 text-xs text-[#9aa7b8]">{scanSource}</span>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              {analytics.map((item) => (
-                <div className="border border-[#253141] bg-[#0c1118] p-3" key={item.label}>
-                  <p className="text-xs text-[#8c98a8]">{item.label}</p>
-                  <p className="mt-2 text-2xl font-semibold leading-none">{item.value}</p>
-                </div>
-              ))}
-            </div>
+          <div className="mx-auto flex w-full max-w-2xl items-center rounded-full bg-[#f1f3f6] px-4 transition focus-within:bg-white focus-within:ring-2 focus-within:ring-[#25b7e8]/25">
+            <SearchIcon />
+            <label className="sr-only" htmlFor="deal-search">
+              Search brand deals
+            </label>
+            <input
+              className="h-11 w-full bg-transparent px-3 text-base text-[#111827] outline-none placeholder:text-[#6b7280]"
+              id="deal-search"
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search keywords"
+              type="search"
+              value={searchQuery}
+            />
           </div>
 
-          <div className="border border-[#2b3545] bg-[#111821] p-4">
-            {connected ? (
-              <div className="flex h-full flex-col justify-between gap-3">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#7f8b9e]">Gmail connected</p>
-                  <p className="mt-2 break-all text-sm text-[#c9d3df]">{scanEmail}</p>
-                  <p className="mt-3 text-xs leading-5 text-[#8c98a8]">{scanState}</p>
-                </div>
-                <button
-                  className="h-12 border border-[#7dd3fc] bg-[#0ea5e9] px-5 text-sm font-semibold text-[#041016] transition hover:bg-[#38bdf8] disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={isScanning}
-                  onClick={scanGmail}
-                  type="button"
-                >
-                  {isScanning ? "Scanning..." : "Scan Gmail"}
-                </button>
-              </div>
-            ) : (
-              <div className="grid gap-3">
-                <label className="grid gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-[#7f8b9e]">
-                  Connect Gmail
-                  <input
-                    className="h-11 border border-[#2f3b4c] bg-[#0c1118] px-3 text-sm font-normal normal-case tracking-normal text-[#f4f7fb] outline-none transition placeholder:text-[#647084] focus:border-[#7dd3fc]"
-                    inputMode="email"
-                    onChange={(event) => setScanEmail(event.target.value)}
-                    placeholder="name@gmail.com"
-                    type="email"
-                    value={scanEmail}
-                  />
-                </label>
-                <button
-                  className="h-11 border border-[#3b485b] bg-[#f4f7fb] px-5 text-sm font-semibold text-[#0c1118] transition hover:bg-[#dce6f2]"
-                  onClick={connectGmail}
-                  type="button"
-                >
-                  Connect Gmail
-                </button>
-                <p className="text-xs leading-5 text-[#8c98a8]">{scanState}</p>
-              </div>
-            )}
+          <div className="flex items-center gap-2">
+            <button
+              aria-label={connected ? "Scan Gmail" : "Connect Gmail"}
+              className="flex h-10 w-10 items-center justify-center rounded-full text-[#374151] transition hover:bg-[#eef2ff] disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={isScanning}
+              onClick={openGmailAction}
+              title={connected ? scanState : "Connect Gmail"}
+              type="button"
+            >
+              {connected ? <ScanIcon /> : <ConnectMailIcon />}
+            </button>
+            <button
+              aria-label="Profile"
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-[#6d45c7] text-sm font-semibold text-white"
+              title={scanEmail || "Profile"}
+              type="button"
+            >
+              {profileInitial(scanEmail)}
+            </button>
           </div>
         </header>
 
+        <section className="mt-6 rounded-3xl border border-[#e0e4ea] bg-white p-6 shadow-sm">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#6d45c7]">Analytics dashboard</p>
+              <p className="mt-1 text-sm text-[#5f6673]">This month</p>
+            </div>
+            <span className="rounded-full border border-[#d8eaf4] bg-[#f0faff] px-3 py-1 text-xs text-[#126c9c]">{scanSource}</span>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {analytics.map((item) => (
+              <div className="rounded-2xl border border-[#e5e7eb] bg-[#fbfcff] p-4" key={item.label}>
+                <p className="text-sm text-[#5f6673]">{item.label}</p>
+                <p className="mt-2 text-3xl font-semibold leading-none text-[#111827]">{item.value}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+
         {oauthConfigured === false ? (
-          <div className="mt-5 border border-[#7a3f2f] bg-[#180e0b] p-4">
-            <p className="text-xs leading-5 text-[#f7b7a3]">
+          <div className="mt-5 rounded-2xl border border-[#fecaca] bg-[#fff1f2] p-4">
+            <p className="text-xs leading-5 text-[#be123c]">
               OAuth setup needed: add Google client credentials to <code>.env.local</code>. Redirect URI: {redirectUri}
             </p>
           </div>
         ) : null}
 
-        <div className="mt-5 flex flex-wrap justify-center gap-3">
+        <div className="mt-6 flex flex-wrap justify-center gap-8 border-b border-[#e5e7eb]">
           {dealStages.map((stage) => (
             <TabButton
               active={activeStage === stage.key}
@@ -304,10 +387,10 @@ export function WorkspaceShell() {
         </section>
 
         {!visibleDeals.length ? (
-          <div className="mt-6 flex min-h-56 items-center justify-center border border-dashed border-[#2f3b4c] bg-[#0a0f15] p-6 text-center">
+          <div className="mt-6 flex min-h-56 items-center justify-center rounded-3xl border border-dashed border-[#cfd8e3] bg-white p-6 text-center">
             <div>
               <p className="text-lg font-semibold">No {dealStages.find((stage) => stage.key === activeStage)?.label.toLowerCase()} deals yet</p>
-              <p className="mt-2 max-w-md text-sm leading-6 text-[#8c98a8]">
+              <p className="mt-2 max-w-md text-sm leading-6 text-[#6b7280]">
                 {connected
                   ? "Scan Gmail to pull in brand deal candidates for the Intake Agent."
                   : "Connect Gmail to unlock live scanning and populate your deal tracker."}
@@ -316,6 +399,56 @@ export function WorkspaceShell() {
           </div>
         ) : null}
       </section>
+
+      {emailDialogOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+          <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-semibold">Connect Gmail</h2>
+                <p className="mt-2 text-sm leading-6 text-[#6b7280]">Enter the Gmail address BrandsAI should scan for brand deals.</p>
+              </div>
+              <button
+                aria-label="Close"
+                className="flex h-9 w-9 items-center justify-center rounded-full text-[#6b7280] transition hover:bg-[#f3f4f6] hover:text-[#111827]"
+                onClick={() => setEmailDialogOpen(false)}
+                type="button"
+              >
+                x
+              </button>
+            </div>
+            <input
+              className="mt-5 h-12 w-full rounded-2xl border border-[#d1d5db] bg-white px-4 text-sm text-[#111827] outline-none transition placeholder:text-[#9ca3af] focus:border-[#25b7e8] focus:ring-2 focus:ring-[#25b7e8]/20"
+              inputMode="email"
+              onChange={(event) => setPendingEmail(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  submitEmailDialog();
+                }
+              }}
+              placeholder="name@gmail.com"
+              type="email"
+              value={pendingEmail}
+            />
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                className="h-10 rounded-full px-4 text-sm font-semibold text-[#4b5563] transition hover:bg-[#f3f4f6]"
+                onClick={() => setEmailDialogOpen(false)}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="h-10 rounded-full bg-[#111827] px-5 text-sm font-semibold text-white transition hover:bg-[#1f2937]"
+                onClick={submitEmailDialog}
+                type="button"
+              >
+                Connect
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }
@@ -323,10 +456,10 @@ export function WorkspaceShell() {
 function TabButton({ active, label, onClick, stage }: { active: boolean; label: string; onClick: () => void; stage: DealStage }) {
   return (
     <button
-      className={`h-11 min-w-44 border px-5 text-sm font-semibold transition ${
+      className={`relative h-12 px-1 text-sm font-semibold transition ${
         active
-          ? stageStyles[stage]
-          : "border-[#2b3545] bg-[#101720] text-[#9aa7b8] hover:border-[#4a5a70] hover:text-[#f4f7fb]"
+          ? "text-[#111827] after:absolute after:bottom-0 after:left-0 after:h-1 after:w-full after:rounded-full after:bg-gradient-to-r after:from-[#25b7e8] after:to-[#6d45c7]"
+          : "text-[#5f6673] hover:text-[#111827]"
       }`}
       onClick={onClick}
       type="button"
@@ -336,17 +469,48 @@ function TabButton({ active, label, onClick, stage }: { active: boolean; label: 
   );
 }
 
+function SearchIcon() {
+  return (
+    <svg aria-hidden="true" className="h-5 w-5 shrink-0 text-[#6b7280]" fill="none" viewBox="0 0 24 24">
+      <path d="m21 21-4.35-4.35m2.35-5.15a7.5 7.5 0 1 1-15 0 7.5 7.5 0 0 1 15 0Z" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
+    </svg>
+  );
+}
+
+function ScanIcon() {
+  return (
+    <svg aria-hidden="true" className="h-5 w-5" fill="none" viewBox="0 0 24 24">
+      <path d="M4 7V5.75A1.75 1.75 0 0 1 5.75 4H7m10 0h1.25A1.75 1.75 0 0 1 20 5.75V7M4 17v1.25A1.75 1.75 0 0 0 5.75 20H7m10 0h1.25A1.75 1.75 0 0 0 20 18.25V17" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
+      <path d="M7 12h10" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
+    </svg>
+  );
+}
+
+function ConnectMailIcon() {
+  return (
+    <svg aria-hidden="true" className="h-5 w-5" fill="none" viewBox="0 0 24 24">
+      <path d="M4.75 6.75h14.5v10.5H4.75z" stroke="currentColor" strokeWidth="2" />
+      <path d="m5.25 7.25 6.75 5 6.75-5" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
+      <path d="M19 4v5m-2.5-2.5h5" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
+    </svg>
+  );
+}
+
+function profileInitial(email: string) {
+  return (email.trim()[0] || "J").toUpperCase();
+}
+
 function DealCard({ deal, stage }: { deal: IntakeDeal; stage: DealStage }) {
   const latestEmail = deal.emails[0];
   const emailText = `${latestEmail?.subject ?? ""} ${latestEmail?.excerpt ?? ""}`;
   const payment = calculateDealValue(deal);
 
   return (
-    <article className="min-h-64 border border-[#2b3545] bg-[#111821] p-4 transition hover:border-[#53647b]">
+    <article className="min-h-64 rounded-3xl border border-[#e0e4ea] bg-white p-5 shadow-sm transition hover:border-[#b6dff0] hover:shadow-md">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h2 className="text-xl font-semibold text-[#f4f7fb]">{deal.company}</h2>
-          <p className="mt-1 break-all text-sm text-[#8c98a8]">POC: {extractSenderEmail(latestEmail?.from ?? deal.contact)}</p>
+          <h2 className="text-xl font-semibold text-[#111827]">{deal.company}</h2>
+          <p className="mt-1 break-all text-sm text-[#6b7280]">POC: {extractSenderEmail(latestEmail?.from ?? deal.contact)}</p>
         </div>
         <StatusTag stage={stage} />
       </div>
@@ -363,11 +527,11 @@ function DealCard({ deal, stage }: { deal: IntakeDeal; stage: DealStage }) {
       </div>
 
       {latestEmail ? (
-        <div className="mt-5 border border-[#253141] bg-[#0c1118] p-3">
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[#7f8b9e]">Latest email</p>
-          <p className="mt-2 line-clamp-1 text-sm font-semibold text-[#d7dee8]">{latestEmail.subject}</p>
-          <p className="mt-1 line-clamp-1 text-xs text-[#7f8b9e]">{latestEmail.from}</p>
-          <p className="mt-2 line-clamp-3 text-sm leading-6 text-[#9aa7b8]">{decodeHtmlEntities(latestEmail.excerpt)}</p>
+        <div className="mt-5 rounded-2xl border border-[#e5e7eb] bg-[#fbfcff] p-4">
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[#6d45c7]">Latest email</p>
+          <p className="mt-2 line-clamp-1 text-sm font-semibold text-[#111827]">{latestEmail.subject}</p>
+          <p className="mt-1 line-clamp-1 text-xs text-[#6b7280]">{latestEmail.from}</p>
+          <p className="mt-2 line-clamp-3 text-sm leading-6 text-[#5f6673]">{decodeHtmlEntities(latestEmail.excerpt)}</p>
         </div>
       ) : null}
     </article>
@@ -378,7 +542,7 @@ function StatusTag({ stage }: { stage: DealStage }) {
   const label = dealStages.find((item) => item.key === stage)?.label ?? "Initial review";
 
   return (
-    <span className={`shrink-0 border px-3 py-2 text-xs font-semibold ${stageStyles[stage]}`}>
+    <span className={`shrink-0 rounded-full px-3 py-2 text-xs font-semibold ${stageStyles[stage]}`}>
       {label}
     </span>
   );
@@ -387,12 +551,12 @@ function StatusTag({ stage }: { stage: DealStage }) {
 function ActionButton({ label, tone }: { label: string; tone: "neutral" | "warning" }) {
   const className =
     tone === "neutral"
-      ? "border-[#4b5563] bg-[#151b24] text-[#cbd5e1] hover:bg-[#1f2937] hover:text-white"
-      : "border-[#fbbf24]/60 bg-[#302409] text-[#fde68a] hover:bg-[#4a350b] hover:text-white";
+      ? "border-[#d1d5db] bg-[#f3f4f6] text-[#4b5563] hover:bg-[#e5e7eb] hover:text-[#111827]"
+      : "border-[#d9c4ff] bg-[#f1e8ff] text-[#6d35c2] hover:bg-[#e7d7ff] hover:text-[#4c1d95]";
 
   return (
     <button
-      className={`h-10 border px-3 text-xs font-semibold transition ${className}`}
+      className={`h-10 rounded-full border px-3 text-xs font-semibold transition ${className}`}
       type="button"
     >
       {label}
@@ -403,8 +567,8 @@ function ActionButton({ label, tone }: { label: string; tone: "neutral" | "warni
 function InfoLine({ label, value, strong = false }: { label: string; value: string; strong?: boolean }) {
   return (
     <div className="grid gap-1 sm:grid-cols-[150px_minmax(0,1fr)]">
-      <span className="text-xs font-semibold uppercase tracking-[0.12em] text-[#7f8b9e]">{label}</span>
-      <span className={strong ? "text-lg font-semibold text-[#f4f7fb]" : "text-[#d7dee8]"}>{value}</span>
+      <span className="text-xs font-semibold uppercase tracking-[0.12em] text-[#6b7280]">{label}</span>
+      <span className={strong ? "text-lg font-semibold text-[#111827]" : "text-[#374151]"}>{value}</span>
     </div>
   );
 }

@@ -3,17 +3,17 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 html {
   min-height: 100%;
-  background: #080b10;
+  background: #fbfbfd;
 }
 
 body {
   min-height: 100vh;
-  color: #f4f7fb;
+  color: #111827;
   font-family: Inter, "Avenir Next", "Segoe UI", "Helvetica Neue", sans-serif;
 }
 
