@@ -8,6 +8,8 @@ type IntakeDeal = {
   id: string;
   company: string;
   contact: string;
+  stage?: DealStage;
+  awaitingResponse?: boolean;
   offer: string;
   deliverables: string;
   timeline: string;
@@ -36,6 +38,13 @@ type GmailErrorResponse = {
   oauthConfigured?: boolean;
 };
 
+type GmailNegotiateResponse = {
+  id: string;
+  threadId: string;
+  sentAt: string;
+  draft: string;
+};
+
 type NegotiationRequirements = {
   minimumTotalEarnings: string;
   maxPosts: string;
@@ -48,18 +57,25 @@ const defaultRequirements: NegotiationRequirements = {
   maxPosts: "",
   customRequirements: ""
 };
-type DealStage = "initial-review" | "negotiating" | "to-be-filmed" | "completed";
+type DealStage = "initial-review" | "negotiating" | "to-be-filmed" | "completed" | "declined";
 const dealStages: Array<{ key: DealStage; label: string; countLabel: string }> = [
-  { key: "initial-review", label: "Initial review", countLabel: "Initial review" },
-  { key: "negotiating", label: "Negotiating", countLabel: "Negotiating" },
-  { key: "to-be-filmed", label: "To be filmed", countLabel: "To be filmed" },
-  { key: "completed", label: "Completed", countLabel: "Completed" }
+  { key: "initial-review", label: "Control Center", countLabel: "Control Center" },
+  { key: "completed", label: "Completed", countLabel: "Completed" },
+  { key: "declined", label: "Declined", countLabel: "Declined" }
 ];
+const stageLabels: Record<DealStage, string> = {
+  "initial-review": "Initial review",
+  negotiating: "Negotiating",
+  "to-be-filmed": "To be filmed",
+  completed: "Completed",
+  declined: "Declined"
+};
 const stageStyles: Record<DealStage, string> = {
   "initial-review": "bg-[#e8f7ff] text-[#126c9c]",
   negotiating: "bg-[#fff4cc] text-[#946200]",
   "to-be-filmed": "bg-[#f1e8ff] text-[#6d35c2]",
-  completed: "bg-[#dcfce7] text-[#15803d]"
+  completed: "bg-[#dcfce7] text-[#15803d]",
+  declined: "bg-[#f3f4f6] text-[#4b5563]"
 };
 
 export function WorkspaceShell() {
@@ -78,27 +94,44 @@ export function WorkspaceShell() {
   const [connected, setConnected] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [activeStage, setActiveStage] = useState<DealStage>("initial-review");
+  const [negotiationDeal, setNegotiationDeal] = useState<IntakeDeal | null>(null);
+  const [negotiationNote, setNegotiationNote] = useState("");
+  const [negotiationState, setNegotiationState] = useState("");
+  const [negotiationErrorCode, setNegotiationErrorCode] = useState<string | null>(null);
+  const [isSendingNegotiation, setIsSendingNegotiation] = useState(false);
+  const [negotiatingDeals, setNegotiatingDeals] = useState<IntakeDeal[]>([]);
+  const [filmingDeals, setFilmingDeals] = useState<IntakeDeal[]>([]);
+  const [declinedDeals, setDeclinedDeals] = useState<IntakeDeal[]>([]);
+  const [decliningDealId, setDecliningDealId] = useState<string | null>(null);
 
   const completedDeals = useMemo<IntakeDeal[]>(() => [], []);
   const stageCounts: Record<DealStage, number> = {
-    "initial-review": scanResults.length,
-    negotiating: 0,
-    "to-be-filmed": 0,
-    completed: completedDeals.length
+    "initial-review": scanResults.length + negotiatingDeals.length + filmingDeals.length,
+    negotiating: negotiatingDeals.length,
+    "to-be-filmed": filmingDeals.length,
+    completed: completedDeals.length,
+    declined: declinedDeals.length
   };
   const stageDeals = useMemo(
-    () => (activeStage === "initial-review" ? scanResults : activeStage === "completed" ? completedDeals : []),
-    [activeStage, completedDeals, scanResults]
+    () =>
+      activeStage === "initial-review"
+        ? sortDealsForControlCenter([...scanResults, ...negotiatingDeals, ...filmingDeals])
+        : activeStage === "negotiating"
+          ? sortDealsForControlCenter([...scanResults, ...negotiatingDeals, ...filmingDeals])
+        : activeStage === "completed"
+          ? completedDeals
+          : declinedDeals,
+    [activeStage, completedDeals, declinedDeals, filmingDeals, negotiatingDeals, scanResults]
   );
   const visibleDeals = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
 
     if (!query) {
-      return stageDeals;
+      return activeStage === "initial-review" ? sortDealsForControlCenter(stageDeals) : stageDeals;
     }
 
-    const allDeals = [...scanResults, ...completedDeals];
-    return allDeals.filter((deal) => {
+    const allDeals = [...scanResults, ...negotiatingDeals, ...filmingDeals, ...completedDeals, ...declinedDeals];
+    const filteredDeals = allDeals.filter((deal) => {
       const latestEmail = deal.emails[0];
       const searchable = [
         deal.company,
@@ -117,16 +150,18 @@ export function WorkspaceShell() {
 
       return searchable.includes(query);
     });
-  }, [completedDeals, scanResults, searchQuery, stageDeals]);
+
+    return activeStage === "initial-review" ? sortDealsForControlCenter(filteredDeals) : filteredDeals;
+  }, [activeStage, completedDeals, declinedDeals, filmingDeals, negotiatingDeals, scanResults, searchQuery, stageDeals]);
   const potentialEarnings = useMemo(
-    () => scanResults.reduce((total, deal) => total + calculateDealValue(deal).total, 0),
-    [scanResults]
+    () => [...scanResults, ...negotiatingDeals, ...filmingDeals].reduce((total, deal) => total + calculateDealValue(deal).total, 0),
+    [filmingDeals, negotiatingDeals, scanResults]
   );
   const analytics = [
     { label: "Earnings", value: "$0" },
     { label: "Potential earnings", value: formatMoney(potentialEarnings) },
     { label: "Completed deals", value: String(completedDeals.length) },
-    { label: "Ongoing deals", value: String(scanResults.length) }
+    { label: "Ongoing deals", value: String(scanResults.length + negotiatingDeals.length + filmingDeals.length) }
   ];
 
   useEffect(() => {
@@ -272,6 +307,12 @@ export function WorkspaceShell() {
     }
   };
 
+  const applyScannedDeals = (deals: IntakeDeal[]) => {
+    setScanResults(deals.filter((deal) => (deal.stage ?? "initial-review") === "initial-review"));
+    setNegotiatingDeals(deals.filter((deal) => deal.stage === "negotiating"));
+    setFilmingDeals(deals.filter((deal) => deal.stage === "to-be-filmed"));
+  };
+
   const scanGmail = async () => {
     const email = scanEmail.trim();
 
@@ -282,6 +323,8 @@ export function WorkspaceShell() {
 
     setIsScanning(true);
     setScanResults([]);
+    setNegotiatingDeals([]);
+    setFilmingDeals([]);
     setScanSource("Scanning");
     setScanState(`Intake Agent is scanning ${email} for brand deal keywords...`);
 
@@ -304,7 +347,7 @@ export function WorkspaceShell() {
       const scannedAt = scan.scannedAt
         ? new Date(scan.scannedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
         : "now";
-      setScanResults(scan.deals);
+      applyScannedDeals(scan.deals);
       setScanSource(scan.source === "gmail-rest-api" ? "Live Gmail API scan" : scan.source ?? "Gmail scan");
       setScanState(
         scan.deals.length
@@ -316,6 +359,134 @@ export function WorkspaceShell() {
     } finally {
       setIsScanning(false);
     }
+  };
+
+  const openNegotiationAgent = (deal: IntakeDeal) => {
+    setNegotiationDeal(deal);
+    setNegotiationNote("");
+    setNegotiationState("");
+    setNegotiationErrorCode(null);
+  };
+
+  const closeNegotiationAgent = () => {
+    if (isSendingNegotiation) {
+      return;
+    }
+
+    setNegotiationDeal(null);
+    setNegotiationNote("");
+    setNegotiationState("");
+    setNegotiationErrorCode(null);
+  };
+
+  const reconnectGmailForSending = () => {
+    const email = scanEmail.trim();
+    if (!email) {
+      setNegotiationState("Connect Gmail before sending a negotiation email.");
+      return;
+    }
+
+    window.location.href = `/api/gmail/auth/start?email=${encodeURIComponent(email)}`;
+  };
+
+  const sendNegotiationEmail = async () => {
+    if (!negotiationDeal) {
+      return;
+    }
+
+    const email = scanEmail.trim();
+    if (!email) {
+      setNegotiationState("Connect Gmail before sending a negotiation email.");
+      return;
+    }
+
+    setIsSendingNegotiation(true);
+    setNegotiationState("Email Agent is drafting and sending...");
+    setNegotiationErrorCode(null);
+
+    try {
+      const response = await fetch("/api/gmail/negotiate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          deal: negotiationDeal,
+          requirements,
+          additionalContext: negotiationNote
+        })
+      });
+      const payload = (await response.json()) as GmailNegotiateResponse | GmailErrorResponse;
+
+      if (!response.ok) {
+        const errorPayload = payload as GmailErrorResponse;
+        setOauthConfigured(errorPayload.oauthConfigured ?? oauthConfigured);
+        setNegotiationErrorCode(errorPayload.code ?? null);
+        throw new Error(errorPayload.error);
+      }
+
+      const sent = payload as GmailNegotiateResponse;
+      const sentAt = new Date(sent.sentAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+      const negotiatingDeal = { ...negotiationDeal, stage: "negotiating" as DealStage, awaitingResponse: true };
+      setScanResults((current) => current.filter((item) => item.id !== negotiationDeal.id));
+      setFilmingDeals((current) => current.filter((item) => item.id !== negotiationDeal.id));
+      setNegotiatingDeals((current) => [negotiatingDeal, ...current.filter((item) => item.id !== negotiationDeal.id)]);
+      setActiveStage("initial-review");
+      setNegotiationState(`Sent at ${sentAt}.`);
+      setScanState(`Email Agent sent a negotiation reply to ${negotiationDeal.company}.`);
+      setNegotiationDeal(null);
+      setNegotiationNote("");
+    } catch (error) {
+      setNegotiationState(error instanceof Error ? error.message : "Email Agent could not send this negotiation email.");
+    } finally {
+      setIsSendingNegotiation(false);
+    }
+  };
+
+  const declineDeal = async (deal: IntakeDeal) => {
+    const email = scanEmail.trim();
+    if (!email) {
+      setScanState("Connect Gmail before declining a brand deal.");
+      return;
+    }
+
+    setDecliningDealId(deal.id);
+    setScanState(`Email Agent is declining ${deal.company}...`);
+
+    try {
+      const response = await fetch("/api/gmail/negotiate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          deal,
+          requirements,
+          additionalContext: "Politely decline this brand deal.",
+          action: "decline"
+        })
+      });
+      const payload = (await response.json()) as GmailNegotiateResponse | GmailErrorResponse;
+
+      if (!response.ok) {
+        const errorPayload = payload as GmailErrorResponse;
+        setOauthConfigured(errorPayload.oauthConfigured ?? oauthConfigured);
+        throw new Error(errorPayload.error);
+      }
+
+      setScanResults((current) => current.filter((item) => item.id !== deal.id));
+      setNegotiatingDeals((current) => current.filter((item) => item.id !== deal.id));
+      setFilmingDeals((current) => current.filter((item) => item.id !== deal.id));
+      setDeclinedDeals((current) => [deal, ...current.filter((item) => item.id !== deal.id)]);
+      setActiveStage("declined");
+      setScanState(`Email Agent declined ${deal.company}.`);
+    } catch (error) {
+      setScanState(error instanceof Error ? error.message : "Email Agent could not decline this deal.");
+    } finally {
+      setDecliningDealId(null);
+    }
+  };
+
+  const startScriptForDeal = (deal: IntakeDeal) => {
+    setScanState(`Script agent is ready for ${deal.company}.`);
   };
 
   return (
@@ -533,7 +704,15 @@ export function WorkspaceShell() {
 
         <section className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {visibleDeals.map((deal) => (
-            <DealCard deal={deal} stage={activeStage} key={deal.id} />
+            <DealCard
+              deal={deal}
+              isDeclining={decliningDealId === deal.id}
+              onDecline={declineDeal}
+              onNegotiate={openNegotiationAgent}
+              onWriteScript={startScriptForDeal}
+              stage={activeStage}
+              key={deal.id}
+            />
           ))}
         </section>
 
@@ -595,6 +774,81 @@ export function WorkspaceShell() {
                 type="button"
               >
                 Connect
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {negotiationDeal ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+          <div className="w-full max-w-xl rounded-3xl bg-white p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-semibold">Email Agent</h2>
+                <p className="mt-2 text-sm leading-6 text-[#6b7280]">
+                  Sending from {scanEmail || "Gmail"} to {extractSenderEmail(negotiationDeal.emails[0]?.from ?? negotiationDeal.contact)}
+                </p>
+              </div>
+              <button
+                aria-label="Close"
+                className="flex h-9 w-9 items-center justify-center rounded-full text-[#6b7280] transition hover:bg-[#f3f4f6] hover:text-[#111827] disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={isSendingNegotiation}
+                onClick={closeNegotiationAgent}
+                type="button"
+              >
+                x
+              </button>
+            </div>
+
+            <div className="mt-5 rounded-2xl border border-[#e5e7eb] bg-[#fbfcff] p-4 text-sm leading-6 text-[#4b5563]">
+              <p>
+                Minimum: {requirements.minimumTotalEarnings ? `$${requirements.minimumTotalEarnings}` : "not set"} · Max posts:{" "}
+                {requirements.maxPosts || "not set"}
+              </p>
+              {requirements.customRequirements ? <p className="mt-2">{requirements.customRequirements}</p> : null}
+            </div>
+
+            <label className="mt-5 grid gap-2 text-sm font-semibold">
+              Additional context
+              <textarea
+                className="min-h-36 rounded-2xl border border-[#d1d5db] bg-white px-4 py-3 font-normal leading-6 text-[#111827] outline-none transition placeholder:text-[#9ca3af] focus:border-[#25b7e8] focus:ring-2 focus:ring-[#25b7e8]/20"
+                disabled={isSendingNegotiation}
+                onChange={(event) => setNegotiationNote(event.target.value)}
+                placeholder="Example: emphasize fast payment, ask for paid usage rights, mention I can post next week..."
+                value={negotiationNote}
+              />
+            </label>
+
+            {negotiationState ? (
+              <p className="mt-4 rounded-2xl bg-[#f7f8fb] px-4 py-3 text-sm leading-6 text-[#4b5563]">{negotiationState}</p>
+            ) : null}
+
+            <div className="mt-5 flex justify-end gap-2">
+              {negotiationErrorCode === "GMAIL_SEND_SCOPE_REQUIRED" || negotiationErrorCode === "GMAIL_OAUTH_REQUIRED" ? (
+                <button
+                  className="h-10 rounded-full border border-[#d9c4ff] bg-[#f1e8ff] px-4 text-sm font-semibold text-[#6d35c2] transition hover:bg-[#e7d7ff]"
+                  onClick={reconnectGmailForSending}
+                  type="button"
+                >
+                  Reconnect Gmail
+                </button>
+              ) : null}
+              <button
+                className="h-10 rounded-full px-4 text-sm font-semibold text-[#4b5563] transition hover:bg-[#f3f4f6] disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={isSendingNegotiation}
+                onClick={closeNegotiationAgent}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="h-10 rounded-full bg-[#111827] px-5 text-sm font-semibold text-white transition hover:bg-[#1f2937] disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={isSendingNegotiation}
+                onClick={sendNegotiationEmail}
+                type="button"
+              >
+                {isSendingNegotiation ? "Sending..." : "Send email"}
               </button>
             </div>
           </div>
@@ -674,10 +928,25 @@ function profileInitial(email: string) {
   return (email.trim()[0] || "J").toUpperCase();
 }
 
-function DealCard({ deal, stage }: { deal: IntakeDeal; stage: DealStage }) {
+function DealCard({
+  deal,
+  isDeclining,
+  onDecline,
+  onNegotiate,
+  onWriteScript,
+  stage
+}: {
+  deal: IntakeDeal;
+  isDeclining: boolean;
+  onDecline: (deal: IntakeDeal) => void;
+  onNegotiate: (deal: IntakeDeal) => void;
+  onWriteScript: (deal: IntakeDeal) => void;
+  stage: DealStage;
+}) {
   const latestEmail = deal.emails[0];
   const emailText = `${latestEmail?.subject ?? ""} ${latestEmail?.excerpt ?? ""}`;
   const payment = calculateDealValue(deal);
+  const dealStage = deal.stage ?? stage;
 
   return (
     <article className="min-h-64 rounded-3xl border border-[#e0e4ea] bg-white p-5 shadow-sm transition hover:border-[#b6dff0] hover:shadow-md">
@@ -686,7 +955,7 @@ function DealCard({ deal, stage }: { deal: IntakeDeal; stage: DealStage }) {
           <h2 className="text-xl font-semibold text-[#111827]">{deal.company}</h2>
           <p className="mt-1 break-all text-sm text-[#6b7280]">POC: {extractSenderEmail(latestEmail?.from ?? deal.contact)}</p>
         </div>
-        <StatusTag stage={stage} />
+        <StatusTag stage={dealStage} />
       </div>
 
       <div className="mt-5 grid gap-4 text-sm">
@@ -695,10 +964,20 @@ function DealCard({ deal, stage }: { deal: IntakeDeal; stage: DealStage }) {
         <InfoLine label="Timeline" value={describeTimeline(deal.timeline, emailText)} />
       </div>
 
-      <div className="mt-5 grid grid-cols-2 gap-2">
-        <ActionButton label="Negotiate" tone="warning" />
-        <ActionButton label="Decline" tone="neutral" />
-      </div>
+      {dealStage === "to-be-filmed" ? (
+        <div className="mt-5">
+          <ActionButton label="Write script" onClick={() => onWriteScript(deal)} tone="success" />
+        </div>
+      ) : deal.awaitingResponse ? (
+        <div className="mt-5 rounded-2xl border border-[#f7df9e] bg-[#fff8e1] px-4 py-3">
+          <p className="text-sm font-semibold text-[#7a5400]">Waiting for {deal.company} response</p>
+        </div>
+      ) : dealStage === "initial-review" || dealStage === "negotiating" ? (
+        <div className="mt-5 grid grid-cols-2 gap-2">
+          <ActionButton label="Negotiate" onClick={() => onNegotiate(deal)} tone="warning" />
+          <ActionButton disabled={isDeclining} label={isDeclining ? "Declining..." : "Decline"} onClick={() => onDecline(deal)} tone="neutral" />
+        </div>
+      ) : null}
 
       {latestEmail ? (
         <div className="mt-5 rounded-2xl border border-[#e5e7eb] bg-[#fbfcff] p-4">
@@ -713,7 +992,7 @@ function DealCard({ deal, stage }: { deal: IntakeDeal; stage: DealStage }) {
 }
 
 function StatusTag({ stage }: { stage: DealStage }) {
-  const label = dealStages.find((item) => item.key === stage)?.label ?? "Initial review";
+  const label = stageLabels[stage];
 
   return (
     <span className={`shrink-0 rounded-full px-3 py-2 text-xs font-semibold ${stageStyles[stage]}`}>
@@ -722,15 +1001,19 @@ function StatusTag({ stage }: { stage: DealStage }) {
   );
 }
 
-function ActionButton({ label, tone }: { label: string; tone: "neutral" | "warning" }) {
+function ActionButton({ disabled = false, label, onClick, tone }: { disabled?: boolean; label: string; onClick?: () => void; tone: "neutral" | "success" | "warning" }) {
   const className =
     tone === "neutral"
       ? "border-[#d1d5db] bg-[#f3f4f6] text-[#4b5563] hover:bg-[#e5e7eb] hover:text-[#111827]"
-      : "border-[#d9c4ff] bg-[#f1e8ff] text-[#6d35c2] hover:bg-[#e7d7ff] hover:text-[#4c1d95]";
+      : tone === "success"
+        ? "w-full border-[#bbf7d0] bg-[#dcfce7] text-[#15803d] hover:bg-[#bbf7d0] hover:text-[#166534]"
+        : "border-[#d9c4ff] bg-[#f1e8ff] text-[#6d35c2] hover:bg-[#e7d7ff] hover:text-[#4c1d95]";
 
   return (
     <button
-      className={`h-10 rounded-full border px-3 text-xs font-semibold transition ${className}`}
+      className={`h-10 rounded-full border px-3 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${className}`}
+      disabled={disabled}
+      onClick={onClick}
       type="button"
     >
       {label}
@@ -816,4 +1099,43 @@ function extractSenderEmail(value: string) {
 
 function decodeHtmlEntities(value: string) {
   return value.replace(/&#39;/g, "'").replace(/&quot;/g, "\"").replace(/&amp;/g, "&");
+}
+
+function actionPriority(deal: IntakeDeal) {
+  const stage = deal.stage ?? "initial-review";
+  if (stage === "to-be-filmed") {
+    return 0;
+  }
+
+  if ((stage === "initial-review" || stage === "negotiating") && !deal.awaitingResponse) {
+    return 1;
+  }
+
+  if (deal.awaitingResponse) {
+    return 2;
+  }
+
+  return 3;
+}
+
+function sentAtValue(deal: IntakeDeal) {
+  const raw = deal.emails[0]?.timestamp;
+  const parsed = raw ? Date.parse(raw) : 0;
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function sortDealsForControlCenter(deals: IntakeDeal[]) {
+  return [...deals].sort((left, right) => {
+    const actionDifference = actionPriority(left) - actionPriority(right);
+    if (actionDifference !== 0) {
+      return actionDifference;
+    }
+
+    const timeDifference = sentAtValue(right) - sentAtValue(left);
+    if (timeDifference !== 0) {
+      return timeDifference;
+    }
+
+    return calculateDealValue(right).total - calculateDealValue(left).total;
+  });
 }

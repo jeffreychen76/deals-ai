@@ -14,9 +14,21 @@ type GmailMessageResponse = {
   threadId: string;
   snippet?: string;
   internalDate?: string;
-  payload?: {
-    headers?: Array<{ name: string; value: string }>;
+  payload?: GmailPayloadPart;
+};
+
+type GmailThreadResponse = {
+  id: string;
+  messages?: GmailMessageResponse[];
+};
+
+type GmailPayloadPart = {
+  mimeType?: string;
+  headers?: Array<{ name: string; value: string }>;
+  body?: {
+    data?: string;
   };
+  parts?: GmailPayloadPart[];
 };
 
 function header(message: GmailMessageResponse, name: string) {
@@ -46,22 +58,125 @@ function inferCompany(from: string, subject: string) {
 }
 
 function inferOffer(text: string) {
-  const perUnit = text.match(/\$[\d,]+(?:\.\d+)?\s*(?:per|\/)\s*(?:post|video|short|reel|tiktok)/i)?.[0];
-  const flat = text.match(/\$[\d,]+(?:\.\d+)?/)?.[0];
-  return perUnit ?? flat ?? "Unknown";
+  const perUnit = text.match(/\$[\d,]+(?:\.\d+)?\s*(?:per|\/)\s*(?:post|video|short|reel|tiktok|deliverable)/i)?.[0];
+  const allAmounts = [...text.matchAll(/\$[\d,]+(?:\.\d+)?/g)].map((match) => match[0]);
+  return perUnit ?? allAmounts.at(-1) ?? "Unknown";
 }
 
 function inferDeliverables(text: string) {
-  const postCount = text.match(/(?:up to\s+)?\d+\s+(?:posts?|videos?|shorts?|reels?|tiktoks?)(?:\s+(?:within|for|per)\s+[^.]+)?/i)?.[0];
-  return postCount ? postCount.charAt(0).toUpperCase() + postCount.slice(1) : "Unknown";
+  const postCount = text.match(/(?:up to\s+)?\d+\s+(?:posts?|videos?|shorts?|reels?|tiktoks?|deliverables?)(?:\s+(?:within|for|per|including|with)\s+[^.\n]+)?/i)?.[0];
+  const namedScope = text.match(/(?:deliverables?|scope|package)\s*(?:are|is|:|-)\s*([^.\n]+)/i)?.[1];
+  const deliverables = postCount ?? namedScope;
+  return deliverables ? deliverables.charAt(0).toUpperCase() + deliverables.slice(1).trim() : "Unknown";
 }
 
 function inferTimeline(text: string) {
+  const days = text.match(/(?:within|in)\s+(\d+)\s+days?/i)?.[0];
+  if (days) {
+    return days.charAt(0).toUpperCase() + days.slice(1);
+  }
+
+  const dateLike = text.match(/(?:by|before|on)\s+((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)/i)?.[0];
+  if (dateLike) {
+    return dateLike.charAt(0).toUpperCase() + dateLike.slice(1);
+  }
+
+  if (/next week/i.test(text)) {
+    return "Next week";
+  }
+
   if (/within the month|for the month|a month|per month/i.test(text)) {
     return "Within the month";
   }
 
   return "Unknown";
+}
+
+function decodeBase64Url(data = "") {
+  const normalized = data.replace(/-/g, "+").replace(/_/g, "/");
+  return Buffer.from(normalized, "base64").toString("utf8");
+}
+
+function htmlToText(value: string) {
+  return value
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, "\"")
+    .replace(/&amp;/g, "&")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n\s+/g, "\n")
+    .trim();
+}
+
+function extractBody(payload?: GmailPayloadPart): string {
+  if (!payload) {
+    return "";
+  }
+
+  if (payload.mimeType === "text/plain" && payload.body?.data) {
+    return decodeBase64Url(payload.body.data);
+  }
+
+  const htmlPart = payload.mimeType === "text/html" && payload.body?.data ? htmlToText(decodeBase64Url(payload.body.data)) : "";
+  const nested = payload.parts?.map(extractBody).filter(Boolean).join("\n\n") ?? "";
+  return nested || htmlPart;
+}
+
+function normalizeSubject(subject: string) {
+  return subject.replace(/^(?:re|fwd):\s*/i, "").trim() || "Potential brand deal";
+}
+
+function isUserMessage(message: GmailMessageResponse, email: string) {
+  return header(message, "From").toLowerCase().includes(email.toLowerCase());
+}
+
+function messageSearchText(message: GmailMessageResponse) {
+  return [header(message, "Subject"), message.snippet, extractBody(message.payload)].filter(Boolean).join(" ");
+}
+
+function threadSearchText(messages: GmailMessageResponse[]) {
+  return messages.map(messageSearchText).join("\n\n");
+}
+
+function dealTermsText(messages: GmailMessageResponse[], email: string) {
+  const brandMessages = messages.filter((message) => !isUserMessage(message, email));
+  return (brandMessages.length ? brandMessages : messages).map(messageSearchText).join("\n\n");
+}
+
+function latestByDate(messages: GmailMessageResponse[]) {
+  return [...messages].sort((left, right) => Number(right.internalDate ?? 0) - Number(left.internalDate ?? 0))[0];
+}
+
+function isFinalizedMessage(text: string) {
+  return /\b(confirmed|approved|accepted|we accept|sounds good|looks good|let'?s move forward|ready to move forward|deal is finalized|we're good to go|contract is attached|agreement is attached|send over the contract|signed|agree to all terms|agreed to all terms|all terms are agreed|terms are agreed|agree with all terms|agreed on all terms|we can agree to all terms|yes we can agree)\b/i.test(
+    text
+  );
+}
+
+function inferStage(messages: GmailMessageResponse[], email: string) {
+  const sortedMessages = [...messages].sort((left, right) => Number(left.internalDate ?? 0) - Number(right.internalDate ?? 0));
+  const latestMessage = sortedMessages[sortedMessages.length - 1];
+  const userMessages = sortedMessages.filter((message) => isUserMessage(message, email));
+  const brandMessages = sortedMessages.filter((message) => !isUserMessage(message, email));
+  const latestUserDate = Math.max(...userMessages.map((message) => Number(message.internalDate ?? 0)), 0);
+  const brandMessagesAfterUser = brandMessages.filter((message) => Number(message.internalDate ?? 0) > latestUserDate);
+  const finalized = brandMessagesAfterUser.some((message) => isFinalizedMessage(messageSearchText(message)));
+
+  if (finalized) {
+    return { stage: "to-be-filmed", awaitingResponse: false };
+  }
+
+  if (userMessages.length) {
+    return {
+      stage: "negotiating",
+      awaitingResponse: latestMessage ? isUserMessage(latestMessage, email) : false
+    };
+  }
+
+  return { stage: "initial-review", awaitingResponse: false };
 }
 
 function formatDate(message: GmailMessageResponse) {
@@ -148,28 +263,36 @@ export async function POST(request: NextRequest) {
     return listed;
   }
 
-  const messages = listed.messages ?? [];
-  const fetchedMessages = await Promise.all(
-    messages.map(async (message) => {
-      const url = `https://gmail.googleapis.com/gmail/v1/users/${userId}/messages/${message.id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date`;
-      const result = await gmailFetch<GmailMessageResponse>(url, accessToken);
+  const threadIds = [...new Set((listed.messages ?? []).map((message) => message.threadId))];
+  const fetchedThreads = await Promise.all(
+    threadIds.map(async (threadId) => {
+      const url = `https://gmail.googleapis.com/gmail/v1/users/${userId}/threads/${encodeURIComponent(threadId)}?format=full`;
+      const result = await gmailFetch<GmailThreadResponse>(url, accessToken);
       return result instanceof NextResponse ? null : result;
     })
   );
 
-  const deals = fetchedMessages
-    .filter((message): message is GmailMessageResponse => Boolean(message))
-    .map((message) => {
-      const from = header(message, "From");
-      const subject = header(message, "Subject") || "Potential brand deal";
+  const deals = fetchedThreads
+    .filter((thread): thread is GmailThreadResponse => Boolean(thread?.messages?.length))
+    .map((thread) => {
+      const messages = [...(thread.messages ?? [])].sort((left, right) => Number(left.internalDate ?? 0) - Number(right.internalDate ?? 0));
+      const externalMessages = messages.filter((message) => !isUserMessage(message, email));
+      const anchorMessage = latestByDate(externalMessages) ?? latestByDate(messages);
+      const from = header(anchorMessage, "From");
+      const subject = normalizeSubject(header(anchorMessage, "Subject"));
       const company = inferCompany(from, subject);
-      const searchableText = `${subject} ${message.snippet ?? ""}`;
+      const searchableText = dealTermsText(messages, email);
+      const latestDisplayMessage = anchorMessage;
+      const latestBody = extractBody(latestDisplayMessage.payload);
+      const stageInfo = inferStage(messages, email);
 
       return {
-        id: `gmail-${message.id}`,
+        id: `gmail-thread-${thread.id}`,
         company,
         contact: senderName(from),
-        status: "candidate",
+        status: stageInfo.stage,
+        stage: stageInfo.stage,
+        awaitingResponse: stageInfo.awaitingResponse,
         offer: inferOffer(searchableText),
         deliverables: inferDeliverables(searchableText),
         timeline: inferTimeline(searchableText),
@@ -180,11 +303,11 @@ export async function POST(request: NextRequest) {
         risks: ["Payment, deliverables, timeline, and usage rights need extraction."],
         emails: [
           {
-            id: message.id,
+            id: latestDisplayMessage.id,
             from,
             subject,
-            timestamp: formatDate(message),
-            excerpt: message.snippet ?? ""
+            timestamp: formatDate(latestDisplayMessage),
+            excerpt: latestBody || (latestDisplayMessage.snippet ?? "")
           }
         ],
         draftReply: `Hi ${firstName(from)},\n\nThanks for reaching out. I am interested in learning more about ${company} and the campaign.\n\nCould you share the proposed deliverables, timeline, budget range, usage rights, revision count, and whether there is a contract for review?\n\nBest,\nAlex`

@@ -2,7 +2,10 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 
 const tokenPath = path.join(process.cwd(), "data", "gmail-oauth-tokens.json");
-const gmailReadonlyScope = "https://www.googleapis.com/auth/gmail.readonly";
+const gmailScopes = [
+  "https://www.googleapis.com/auth/gmail.readonly",
+  "https://www.googleapis.com/auth/gmail.send"
+].join(" ");
 
 type TokenResponse = {
   access_token: string;
@@ -30,18 +33,18 @@ type GmailProfile = {
   emailAddress: string;
 };
 
-export function getGmailOAuthConfig() {
+export function getGmailOAuthConfig(origin?: string) {
   const clientId = process.env.GOOGLE_CLIENT_ID ?? process.env.GMAIL_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET ?? process.env.GMAIL_CLIENT_SECRET;
   const redirectUri =
-    process.env.GOOGLE_REDIRECT_URI ?? process.env.GMAIL_REDIRECT_URI ?? "http://localhost:3000/api/gmail/auth/callback";
+    origin ? `${origin}/api/gmail/auth/callback` : process.env.GOOGLE_REDIRECT_URI ?? process.env.GMAIL_REDIRECT_URI ?? "http://localhost:3000/api/gmail/auth/callback";
 
   return {
     clientId,
     clientSecret,
     configured: Boolean(clientId && clientSecret),
     redirectUri,
-    scope: gmailReadonlyScope
+    scope: gmailScopes
   };
 }
 
@@ -89,8 +92,8 @@ async function exchangeToken(params: URLSearchParams) {
   return (await response.json()) as TokenResponse;
 }
 
-export function buildGmailAuthUrl(state: string, loginHint?: string) {
-  const config = getGmailOAuthConfig();
+export function buildGmailAuthUrl(state: string, loginHint?: string, origin?: string) {
+  const config = getGmailOAuthConfig(origin);
 
   if (!config.clientId) {
     throw new Error("GOOGLE_CLIENT_ID or GMAIL_CLIENT_ID is required.");
@@ -113,7 +116,7 @@ export function buildGmailAuthUrl(state: string, loginHint?: string) {
   return url.toString();
 }
 
-export async function saveCodeExchange(code: string) {
+export async function saveCodeExchange(code: string, redirectUri?: string) {
   const config = getGmailOAuthConfig();
 
   if (!config.clientId || !config.clientSecret) {
@@ -125,7 +128,7 @@ export async function saveCodeExchange(code: string) {
       code,
       client_id: config.clientId,
       client_secret: config.clientSecret,
-      redirect_uri: config.redirectUri,
+      redirect_uri: redirectUri ?? config.redirectUri,
       grant_type: "authorization_code"
     })
   );

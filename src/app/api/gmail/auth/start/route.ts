@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { buildGmailAuthUrl, getGmailOAuthConfig } from "@/lib/gmail-oauth";
 
 export async function GET(request: NextRequest) {
-  const config = getGmailOAuthConfig();
+  const config = getGmailOAuthConfig(request.nextUrl.origin);
   const email = request.nextUrl.searchParams.get("email")?.trim();
 
   if (!config.configured) {
@@ -17,9 +17,15 @@ export async function GET(request: NextRequest) {
   }
 
   const state = randomBytes(24).toString("hex");
-  const url = buildGmailAuthUrl(state, email);
+  const url = buildGmailAuthUrl(state, email, request.nextUrl.origin);
   const response = NextResponse.redirect(url);
   response.cookies.set("gmail_oauth_state", state, {
+    httpOnly: true,
+    maxAge: 10 * 60,
+    path: "/",
+    sameSite: "lax"
+  });
+  response.cookies.set("gmail_oauth_redirect_uri", config.redirectUri, {
     httpOnly: true,
     maxAge: 10 * 60,
     path: "/",
